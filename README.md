@@ -4,7 +4,8 @@
 
 Have you ever struggled with poor team coordination or unresponsive teammates during a group project? In many academic and professional settings, it becomes difficult to track who is actually contributing and who is not. This leads to unfair evaluation, missed deadlines, and reduced overall productivity.
 
-Snitch AI addresses this problem by monitoring group conversations, extracting actionable tasks, tracking progress, and generating detailed reports about each member’s contribution. It enables professors or managers to gain transparent insights into team performance without manually reviewing chat history.
+Snitch AI addresses this problem by monitoring group conversations, extracting actionable tasks, tracking progress, and generating detailed reports about each member’s contribution. It enables professors or managers to gain transparent insights into team performance without manually reviewing chat history. It Basically Sntich on you.
+
 
 
 
