@@ -1,76 +1,99 @@
-import json
-from database import (
-    add_task, get_tasks, task_exists,
-    complete_task, add_user, update_user_activity,
-    get_user_name_from_db
-)
-from slack_handler import get_user_name
-from rag import store_message, retrieve_context
-from llm import extract_task_llm
+from llm import llm
+            contribution_score += 3
+
+        else:
+            contribution_score += 1
+
+        if category in ["backend", "deployment", "debugging"]:
+            contribution_score += 2
+
+        return {
+            "contribution_score": contribution_score
+        }
 
 
-def clean_task(text):
-    text = text.lower()
+class DatabaseAgent:
+    def store(self, user_name: str, extracted_data: dict):
+        task = extracted_data.get("task")
+        deadline = extracted_data.get("deadline")
+        status = extracted_data.get("status")
 
-    if "will" in text:
-        text = text.split("will")[-1]
+        add_task(user_name, task, deadline)
 
-    for word in ["before", "by", "tomorrow", "today", "pm", "am"]:
-        text = text.replace(word, "")
-
-    return text.strip()
+        if status == "completed":
+            complete_task(user_name)
 
 
-def run_agent(user, message):
-
-    print("\n===== AGENT START =====")
-    print("USER:", user)
-    print("MESSAGE:", message)
-
-    # ---------------- STORE MEMORY ----------------
-    store_message(message)
-
-    # ---------------- USER TRACKING ----------------
-    name = get_user_name(user)
-    add_user(user, name)
-    update_user_activity(user)
-
-    message_lower = message.lower()
-
-    # ---------------- COMPLETE TASK ----------------
-    if "done" in message_lower or "completed" in message_lower:
-        complete_task(user)
-        return "🎉 Task marked as completed!"
-
-    # ---------------- REPORT ----------------
-    if "report" in message_lower:
+class ReportingAgent:
+    def generate_report(self):
         tasks = get_tasks()
 
         if not tasks:
-            return "📭 No tasks available."
+            return "No contributions recorded yet."
 
-        formatted = "\n".join(
-            [f"{get_user_name_from_db(t[0])} → {t[1]} → {t[3]}" for t in tasks]
+        report_lines = ["📊 Contribution Report\n"]
+
+        for task in tasks:
+            report_lines.append(
+                f"User: {task['user']} | "
+                f"Task: {task['task']} | "
+                f"Status: {task['status']}"
+            )
+
+        return "\n".join(report_lines)
+
+
+class OrchestratorAgent:
+    def __init__(self):
+        self.monitoring_agent = MonitoringAgent()
+        self.retrieval_agent = RetrievalAgent()
+        self.extraction_agent = TaskExtractionAgent()
+        self.validation_agent = ValidationAgent()
+        self.analysis_agent = ContributionAnalysisAgent()
+        self.database_agent = DatabaseAgent()
+        self.reporting_agent = ReportingAgent()
+
+    def run(self, user_id: str, message: str):
+        monitored = self.monitoring_agent.process_event(user_id, message)
+
+        message = monitored["message"]
+
+        store_message(message)
+
+        user_name = get_user_name(user_id)
+        add_user(user_name)
+
+        if "report" in message.lower():
+            return self.reporting_agent.generate_report()
+
+        context = self.retrieval_agent.retrieve(message)
+
+        extracted_data = self.extraction_agent.extract(
+            user_name=user_name,
+            message=message,
+            context=context
         )
 
-        return f"📊 *Report*\n\n{formatted}"
+        is_valid = self.validation_agent.validate(extracted_data)
 
-    # ---------------- TASK EXTRACTION (FIXED) ----------------
-    context = retrieve_context(message)
+        if not is_valid:
+            return "Message processed. No actionable task detected."
 
-    data = extract_task_llm(message, context)
+        analysis = self.analysis_agent.analyze(extracted_data)
 
-    print("EXTRACTED:", data)
+        self.database_agent.store(user_name, extracted_data)
 
-    if data.get("is_task"):
-        task = clean_task(data.get("task", message))
-        deadline = data.get("deadline", "Not specified")
+        return (
+            f"Task recorded for {user_name}.\n"
+            f"Task: {extracted_data['task']}\n"
+            f"Status: {extracted_data['status']}\n"
+            f"Category: {extracted_data['category']}\n"
+            f"Contribution Score: {analysis['contribution_score']}"
+        )
 
-        if task_exists(user, task):
-            return "⚠️ Task already exists"
 
-        add_task(user, task, deadline)
+orchestrator = OrchestratorAgent()
 
-        return f"✅ Task added:\n• {task}\n📅 {deadline}"
 
-    return "🤖 Got it! No task detected."
+def run_agent(user_id: str, message: str):
+    return orchestrator.run(user_id, message)
