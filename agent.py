@@ -10,42 +10,45 @@ from slack_handler import get_user_name
 import json
 
 
-class MonitoringAgent:
-    def process_event(self, user_id: str, message: str):
-        return {
-            "user_id": user_id,
-            "message": message.strip()
-        }
+class ContextAgent:
+    def prepare(self, user_id: str, message: str):
+        cleaned_message = message.strip()
 
+        store_message(cleaned_message)
 
-class RetrievalAgent:
-    def retrieve(self, message: str):
-        context = retrieve_context(message)
+        user_name = get_user_name(user_id)
+
+        add_user(user_name)
+
+        context = retrieve_context(cleaned_message)
 
         if isinstance(context, list):
-            return "\n".join(
+            context = "\n".join(
                 [doc.page_content for doc in context]
             )
 
-        return context
+        return {
+            "user_name": user_name,
+            "message": cleaned_message,
+            "context": context
+        }
 
 
-class TaskExtractionAgent:
+class TaskReasoningAgent:
     SYSTEM_PROMPT = """
-You are an expert project task extraction agent.
+You are an expert project contribution analysis agent.
 
-Your responsibilities:
-- Identify actionable project tasks
+Responsibilities:
+- Detect meaningful project tasks
 - Identify contribution activity
-- Detect completion status
-- Detect deadlines if mentioned
-- Ignore greetings and casual conversation
+- Infer task completion state
+- Ignore greetings and casual chatter
 - Return ONLY valid JSON
 
 Rules:
-- Extract only meaningful technical/project tasks
-- Ignore messages like 'hi', 'lol', 'okay', 'thanks'
-- Detect whether task is completed, pending, or in-progress
+- Extract only actionable project work
+- Ignore non-technical conversation
+- Infer whether work is completed, pending, or in progress
 - If no task exists, return is_task=false
 
 Output Schema:
@@ -53,13 +56,12 @@ Output Schema:
   "is_task": boolean,
   "task": "string",
   "status": "pending | in_progress | completed",
-  "deadline": "string or null",
   "category": "frontend/backend/debugging/deployment/documentation/general",
   "confidence": float
 }
 """
 
-    def extract(self, user_name: str, message: str, context: str):
+    def analyze(self, user_name: str, message: str, context: str):
         prompt = f"""
 Conversation Context:
 {context}
@@ -72,9 +74,9 @@ Contributor:
 
 Think step-by-step:
 1. Understand the conversational meaning
-2. Identify whether a project task exists
-3. Detect ownership and contribution type
-4. Infer task status
+2. Detect whether project work exists
+3. Infer contribution type
+4. Infer completion status
 5. Return structured JSON
 """
 
@@ -90,78 +92,21 @@ Think step-by-step:
                 else response
             )
 
-            return json.loads(content)
+            data = json.loads(content)
+
+            if not data.get("is_task"):
+                return None
+
+            if data.get("confidence", 0) < 0.5:
+                return None
+
+            if not data.get("task"):
+                return None
+
+            return data
 
         except Exception:
-            return {
-                "is_task": False,
-                "task": None,
-                "status": "unknown",
-                "deadline": None,
-                "category": "general",
-                "confidence": 0.0
-            }
-
-
-class ValidationAgent:
-    def validate(self, extracted_data: dict):
-        if not extracted_data.get("is_task"):
-            return False
-
-        task = extracted_data.get("task")
-
-        if not task:
-            return False
-
-        if len(task.strip()) < 3:
-            return False
-
-        confidence = extracted_data.get("confidence", 0)
-
-        if confidence < 0.5:
-            return False
-
-        return True
-
-
-class ContributionAnalysisAgent:
-    def analyze(self, extracted_data: dict):
-        contribution_score = 0
-
-        status = extracted_data.get("status")
-        category = extracted_data.get("category")
-
-        if status == "completed":
-            contribution_score += 5
-
-        elif status == "in_progress":
-            contribution_score += 3
-
-        else:
-            contribution_score += 1
-
-        if category in [
-            "backend",
-            "deployment",
-            "debugging"
-        ]:
-            contribution_score += 2
-
-        return {
-            "contribution_score": contribution_score
-        }
-
-
-class DatabaseAgent:
-    def store(self, user_name: str, extracted_data: dict):
-        task = extracted_data.get("task")
-        deadline = extracted_data.get("deadline")
-        status = extracted_data.get("status")
-
-        add_task(user_name, task, deadline)
-
-        if status == "completed":
-            complete_task(user_name)
+            return None
 
 
 class ReportingAgent:
@@ -170,6 +115,8 @@ class ReportingAgent:
 
         if not tasks:
             return "No contributions recorded yet."
+
+        report = ["📊 Weekly Contribution Report\n"]
 
         user_stats = {}
 
@@ -187,8 +134,6 @@ class ReportingAgent:
             else:
                 user_stats[user]["pending"] += 1
 
-        report = ["📊 Weekly Contribution Report\n"]
-
         for user, stats in user_stats.items():
             report.append(
                 f"{user}\n"
@@ -201,66 +146,59 @@ class ReportingAgent:
 
 class OrchestratorAgent:
     def __init__(self):
-        self.monitoring_agent = MonitoringAgent()
-        self.retrieval_agent = RetrievalAgent()
-        self.extraction_agent = TaskExtractionAgent()
-        self.validation_agent = ValidationAgent()
-        self.analysis_agent = ContributionAnalysisAgent()
-        self.database_agent = DatabaseAgent()
+        self.context_agent = ContextAgent()
+        self.reasoning_agent = TaskReasoningAgent()
         self.reporting_agent = ReportingAgent()
 
     def run(self, user_id: str, message: str):
-        monitored = self.monitoring_agent.process_event(
+        prepared = self.context_agent.prepare(
             user_id,
             message
         )
 
-        message = monitored["message"]
-
-        store_message(message)
-
-        user_name = get_user_name(user_id)
-
-        add_user(user_name)
+        user_name = prepared["user_name"]
+        message = prepared["message"]
+        context = prepared["context"]
 
         if "report" in message.lower():
             return self.reporting_agent.generate_report()
 
-        context = self.retrieval_agent.retrieve(message)
-
-        extracted_data = self.extraction_agent.extract(
+        result = self.reasoning_agent.analyze(
             user_name=user_name,
             message=message,
             context=context
         )
 
-        is_valid = self.validation_agent.validate(
-            extracted_data
-        )
+        if not result:
+            return "Message processed. No actionable task detected."
 
-        if not is_valid:
-            return (
-                "Message processed. "
-                "No actionable task detected."
-            )
+        task = result["task"]
+        status = result["status"]
 
-        analysis = self.analysis_agent.analyze(
-            extracted_data
-        )
+        add_task(user_name, task, None)
 
-        self.database_agent.store(
-            user_name,
-            extracted_data
-        )
+        if status == "completed":
+            complete_task(user_name)
+
+        contribution_score = 1
+
+        if status == "completed":
+            contribution_score += 4
+
+        if result["category"] in [
+            "backend",
+            "deployment",
+            "debugging"
+        ]:
+            contribution_score += 2
 
         return (
             f"Task recorded for {user_name}.\n"
-            f"Task: {extracted_data['task']}\n"
-            f"Status: {extracted_data['status']}\n"
-            f"Category: {extracted_data['category']}\n"
-            f"Confidence: {extracted_data['confidence']}\n"
-            f"Contribution Score: "
-            f"{analysis['contribution_score']}"
+            f"Task: {task}\n"
+            f"Status: {status}\n"
+            f"Category: {result['category']}\n"
+            f"Confidence: {result['confidence']}\n"
+            f"Contribution Score: {contribution_score}"
         )
 
 
